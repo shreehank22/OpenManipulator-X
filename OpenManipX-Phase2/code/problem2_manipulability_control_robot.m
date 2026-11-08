@@ -1,122 +1,168 @@
 function problem2_manipulability_control_robot()
+%PROBLEM2_MANIPULABILITY_CONTROL_ROBOT Task 2 (position control + manipulability
+%maximization in the null space) on the
+%real OpenManipulator-X. Closes the loop on measured joint angles and commands
+%joint velocities in velocity mode.
 
-    %% Paths 
+    %% Paths
     codeDir = fileparts(mfilename("fullpath"));
     addpath(fullfile(codeDir, "..", "..", "Communication_Code"));
+    % Dynamixel SDK paths (headers + shared library). Needed whenever the SDK
+    % library has to be (re)loaded, e.g. after "clear all" or a MATLAB restart.
+    run(fullfile(codeDir, "..", "..", "init_libraries.m"));
     dataDir = fullfile(codeDir, "..", "data");
 
-    %% Load parameters
+    %% Parameters (re-run the sim with the same values for comparison)
     params = robotParams();
-    x_des = [0.20; 0.20; 0.15];
-    Kp = 1.5;
-    k0 = 20;      % null-space gain (Phase 1 sim: 100); start low on hardware
-    Ts = 0.05;
-    Tfinal = 10;
-    qd_max = 0.5; % rad/s
+    x_des  = [0.20; 0.20; 0.15];
+    Kp     = 1.5;
+    k0     = 50;         % null-space gain (Phase 1 sim: 100); start low on hardware
+    Ts     = 0.05;        % target sample time (s)
+    Tfinal = 10;          % run duration (s)
+    qd_max = 0.5;         % joint velocity limit (rad/s)
 
-    %% joint limits from URDF
+    %% Joint limits from the URDF (rad); joint 1 restricted for cable safety
     q_min  = [-1.5; -1.5; -1.5; -1.7];
     q_max  = [ 1.5;  1.5;  1.4;  1.97];
     margin = deg2rad(10);
 
-    %% Logs 
+    %% Logs (one struct so they can be passed to saveRun)
     N = round(Tfinal/Ts);
-    t_log = zeros(1, N);
-    dt_log = zeros(1, N);
-    m_log = zeros(1, N);
-    q_log = zeros(4, N);
-    qdot_meas_log = zeros(4, N);
-    qdot_cmd_log = zeros(4, N);
-    x_log = zeros(3, N);
-    e_log = zeros(3, N);
-    kLast = 0;
-    stopFlag = "interrupt";
+    L.t             = zeros(1, N);
+    L.dt_log        = zeros(1, N);
+    L.m_log         = zeros(1, N);
+    L.q_log         = zeros(4, N);
+    L.qdot_meas_log = zeros(4, N);
+    L.qdot_cmd_log  = zeros(4, N);
+    L.x_log         = zeros(3, N);
+    L.e_log         = zeros(3, N);
+    kLast    = 0;
+    stopFlag = "complete";
+    runError = [];
 
+    %% Connect. The guard commands zero velocities whenever this function exits,
+    %% including Ctrl+C. It holds its own reference to the robot, so it does not
+    %% depend on this function's workspace still existing.
     robot = Robot();
-    cleanup = onCleanup(@finishRun);   % runs on normal exit, error, or Ctrl+C
-    input("SUPPORT THE ARM, then press Enter to home the robot (position mode)... ", "s");
-    robot.writeMode('p');
-    robot.writeTime(2);
-    robot.writeMotorState(true);
-    robot.writeJoints([0 0 0 0]);
-    pause(3);
+    stopGuard = onCleanup(@() stopRobot(robot)); %#ok<NASGU>
 
-    input("SUPPORT THE ARM, then press Enter to switch to velocity mode... ", "s");
-    robot.writeMode('v');
-    robot.writeVelocities([0 0 0 0]);
+    try
+        %% Home (q = 0) in position mode
+        input("SUPPORT THE ARM, then press Enter to home the robot (position mode)... ", "s");
+        robot.writeMode('p');
+        robot.writeTime(2);
+        robot.writeMotorState(true);
+        robot.writeJoints([0 0 0 0]);
+        pause(3);
 
+        input("SUPPORT THE ARM, then press Enter to switch to velocity mode... ", "s");
+        robot.writeMode('v');
+        % writeMode re-applies the homing profile (667 ms acceleration). In the
+        % servos' time-based profile mode every new velocity command restarts that
+        % ramp, so with a new command every Ts the joints lag by ~1 s and small
+        % commands never execute. Acceleration time 0 disables the profile so the
+        % servos follow each command directly (homing calls writeTime(2) again).
+        robot.writeTime(2, 0);
+        robot.writeVelocities([0 0 0 0]);
 
-    %%% Control loop
-    t0 = tic;
-    for k = 1:N
-        tloop = tic;
+        %% Control loop
+        fprintf("Control loop running for %g s (Ctrl+C to abort)...\n", Tfinal);
+        t0 = tic;
+        for k = 1:N
+            tLoop = tic;
 
-        r=robot.getJointsReadings();
-        q = deg2rad(r(1,:)');
-        qd_meas = deg2rad(r(2,:)');
+            % 1) Measure (deg -> rad)
+            r = robot.getJointsReadings();
+            q       = deg2rad(r(1,:)');
+            qd_meas = deg2rad(r(2,:)');
 
-        % safety check 
-        if any(q < q_min + margin) || any(q > q_max - margin)
-            warning("Joint limit reached. Stopping the robot.");
-            stopFlag = "limit";
-            break;
+            % 1b) Reject implausible readings. A failed bulk read returns 0 deg;
+            %     at qd_max a joint moves < 2 deg per sample, so a 10 deg jump is a bad read.
+            if k > 1 && max(abs(q - L.q_log(:,k-1))) > deg2rad(10)
+                warning("Implausible joint reading at t = %.2f s (jump > 10 deg). Stopping.", toc(t0));
+                stopFlag = "badread";
+                break;
+            end
+
+            % 2) Safety: stop before any joint gets near its limit
+            if any(q < q_min + margin) || any(q > q_max - margin)
+                warning("Joint limit reached at t = %.2f s. Stopping the robot.", toc(t0));
+                stopFlag = "limit";
+                break;
+            end
+
+            % 3) Control law (same function as the simulation)
+            x = openManipulatorPosition(q, params);
+            [qd_cmd, m] = controlLawTask2(q, x, x_des, params, Kp, k0);
+
+            % 4) Saturate by uniform scaling (keeps the direction of qdot)
+            qd_cmd = qd_cmd * min(1, qd_max / max(abs(qd_cmd)));
+
+            % 5) Command (rad/s -> deg/s)
+            robot.writeVelocities(rad2deg(qd_cmd'));
+
+            % 6) Log
+            L.t(k)               = toc(t0);
+            L.q_log(:,k)         = q;
+            L.qdot_meas_log(:,k) = qd_meas;
+            L.qdot_cmd_log(:,k)  = qd_cmd;
+            L.x_log(:,k)         = x;
+            L.e_log(:,k)         = x_des - x;
+            L.m_log(k)           = m;
+            kLast = k;
+
+            % (printed before the wait so its time is included in dt_log)
+            if mod(k, round(1/Ts)) == 0       % progress once per second
+                fprintf("  t = %4.1f s   ||e|| = %.4f m\n", L.t(k), norm(L.e_log(:,k)));
+            end
+
+            % 7) Fixed sample time
+            while toc(tLoop) < Ts
+            end
+            L.dt_log(k) = toc(tLoop);
         end
-
-        % control law
-        x = openManipulatorPosition(q, params);
-        [qdot_cmd, m] = controlLawTask2(q, x, x_des, params, Kp, k0);
-
-        % limit the commanded velocity
-        qdot_cmd = qdot_cmd * min(1, qd_max / max(abs(qdot_cmd)));
-
-        robot.writeVelocities(rad2deg(qdot_cmd'));
-
-        %%% Logging
-        t_log(k) = toc(t0);
-        q_log(:,k) = q;
-        qdot_meas_log(:,k) = qd_meas;
-        qdot_cmd_log(:,k) = qdot_cmd;
-        x_log(:,k) = x;
-        e_log(:,k) = x_des - x;
-        m_log(k) = m;
-        kLast = k;
-
-        while toc(tloop) < Ts
-        end
-        dt_log(k) = toc(tloop);
+    catch runError
+        stopFlag = "error";
     end
 
-    if kLast == N
-        stopFlag = "complete";
-    end
+    %% Stop and save (normal completion, joint-limit stop, or MATLAB error).
+    %% Torque stays ON: the arm holds itself at zero velocity. Support the arm
+    %% before the next writeMode call.
+    stopRobot(robot);
+    meta = struct("Kp", Kp, "qd_max", qd_max, "Ts", Ts, "stopFlag", stopFlag);
+    meta.x_des  = x_des;
+    meta.params = params;
+    meta.k0     = k0;
+    stamp = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
+    fname = fullfile(dataDir, sprintf("robot_task2_Kp%g_k0%g_sat%g_%s_%s.mat", Kp, k0, qd_max, stopFlag, stamp));
+    saveRun(fname, L, kLast, meta);
 
-    %% Always stop the robot and save whatever was logged
-    % Torque is left ON: the arm holds itself at zero velocity. Support the
-    % arm before the next writeMode call.
-    function finishRun()
-        try robot.writeVelocities([0 0 0 0]); catch, end
-        if kLast == 0
-            fprintf("Stopped (%s) before any samples were logged. Nothing saved.\n", stopFlag);
-            return;
-        end
-        idx = 1:kLast;                                  % drop unused preallocated samples
-        t = t_log(idx);  dt_log = dt_log(idx);  m_log = m_log(idx);
-        q_log = q_log(:,idx);  qdot_meas_log = qdot_meas_log(:,idx);
-        qdot_cmd_log = qdot_cmd_log(:,idx);  x_log = x_log(:,idx);  e_log = e_log(:,idx);
-        stamp = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
-        fname = fullfile(dataDir, sprintf("robot_task2_Kp%g_k0%g_sat%g_%s_%s.mat", ...
-                         Kp, k0, qd_max, stopFlag, stamp));
-        out = struct("t", t, "dt_log", dt_log, "q_log", q_log, ...
-                     "qdot_meas_log", qdot_meas_log, "qdot_cmd_log", qdot_cmd_log, ...
-                     "x_log", x_log, "e_log", e_log, "m_log", m_log, ...
-                     "Kp", Kp, "qd_max", qd_max, "Ts", Ts, ...
-                     "stopFlag", stopFlag);
-        out.x_des = x_des;  out.params = params;
-        out.k0 = k0;
-        save(fname, "-struct", "out");
-        fprintf("Stopped (%s). Saved %d samples to %s\n", stopFlag, kLast, fname);
-        fprintf("Final ||e||: %.3e m   Final m_t: %.4e m^3   mean dt: %.4f s   max dt: %.4f s\n", ...
-                norm(e_log(:,end)), m_log(end), mean(dt_log), max(dt_log));
+    if ~isempty(runError), rethrow(runError); end
+end
+
+%% ---------------------------------------------------------------- helpers
+function stopRobot(robot)
+    % Command zero joint velocities; never throw (used from onCleanup).
+    try
+        robot.writeVelocities([0 0 0 0]);
+    catch
     end
 end
 
+function saveRun(fname, L, kLast, meta)
+    % Save samples 1:kLast of every log plus the run settings in meta.
+    if kLast == 0
+        fprintf("Stopped (%s) before any samples were logged. Nothing saved.\n", meta.stopFlag);
+        return;
+    end
+    out = meta;
+    names = fieldnames(L);
+    for i = 1:numel(names)
+        out.(names{i}) = L.(names{i})(:, 1:kLast);
+    end
+    save(fname, "-struct", "out");
+    fprintf("Stopped (%s). Saved %d samples to %s\n", meta.stopFlag, kLast, fname);
+    valid = out.dt_log > 0;
+    fprintf("Final ||e||: %.3e m   Final m_t: %.4e m^3   mean dt: %.4f s   max dt: %.4f s\n", ...
+            norm(out.e_log(:,end)), out.m_log(end), mean(out.dt_log(valid)), max(out.dt_log(valid)));
+end
