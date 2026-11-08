@@ -97,8 +97,12 @@ data/sim_task1_Kp1.5_sat0.5.mat
 data/sim_task2_Kp1.5_k020_sat0.5.mat
 ```
 
-Expected: both runs get within 1 mm of the target after about 3.9 s. The final m_t is
-≈ 9.76e-3 for Task 1 and ≈ 1.05e-2 for Task 2.
+Expected (final ‖e‖, final m_t; both reach 1 mm at about 3.9 s):
+
+| | Final ‖e‖ (m) | Final m_t (m³) | Final q (rad) |
+|---|---|---|---|
+| Task 1 | ≈ 7.0e-8 | ≈ 9.71e-3 | [0.816, 0.072, 0.061, 0.026] |
+| Task 2 | ≈ 7.5e-7 | ≈ 1.02e-2 | [0.816, 0.091, −0.090, 0.291] |
 
 ### Step 3: Test the plotting function (offline)
 
@@ -172,8 +176,10 @@ saturates, sends velocities (rad/s → deg/s), logs, and waits until Ts has pass
   Scaling the whole vector keeps the direction of motion.
 - **Joint-limit stop:** the run stops if any joint gets within 10° of its URDF limit.
   The file is then tagged `limit`.
-- **Clean stop:** `onCleanup` sends zero velocities and saves the log on normal exit,
-  error, **or Ctrl+C**. The file is then tagged `interrupt`.
+- **Clean stop:** zero velocities are always sent when the script exits, including on
+  **Ctrl+C**. The log is saved after a normal finish (tagged `complete`), a joint-limit stop
+  (`limit`), an implausible joint reading (`badread`), or a MATLAB error (`error`).
+  **A Ctrl+C run is not saved.**
 - **Torque stays on** after the run. The arm holds itself at zero velocity.
   **Support the arm before the next run**, because homing calls `writeMode('p')`.
 
@@ -290,7 +296,7 @@ robot files the same way:
 | `dt_log` | 1×N | achieved sample time (s); constant in sim |
 | `Kp`, `k0`, `qd_max` | scalar | gains (`k0` only for Task 2) |
 | `x_des`, `params` | – | desired position, link lengths |
-| `Ts`, `stopFlag` | – | robot only: target sample time; `complete` / `limit` / `interrupt` |
+| `Ts`, `stopFlag` | – | robot only: target sample time; `complete` / `limit` / `badread` / `error` |
 
 ---
 
