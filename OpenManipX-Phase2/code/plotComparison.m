@@ -34,6 +34,11 @@ function plotComparison(simFile, robotFile, tag)
     checkSame("k0", S, R);
     checkSame("qd_max", S, R);
 
+    % Sim files have no Ts/stopFlag; fill them in so a sim file can stand in
+    % for the robot file when testing this function
+    if ~isfield(R, "Ts"),       R.Ts = median(R.dt_log); end
+    if ~isfield(R, "stopFlag"), R.stopFlag = "n/a (simulation file)"; end
+
     %% Styles: simulation dashed grey, robot solid blue, commands orange
     cSim = [0.45 0.45 0.45];
     cRob = [0.0000 0.4470 0.7410];
@@ -64,7 +69,7 @@ function plotComparison(simFile, robotFile, tag)
         plot(ax, R.t, R.qdot_meas_log(i,:), "-",  "Color", cRob, "LineWidth", lw); hold(ax, "off");
         styleAxes(ax, tEnd, i > 2, sprintf("$\\dot q_%d$ (rad/s)", i));
         if i == 1
-            legend(ax, "Simulation", "Robot commanded", "Robot measured", "Location", "best");
+            legend(ax, "Simulation", "Robot commanded", "Robot measured", "Location", "northeast");
         end
     end
     saveFig(fig, figDir, tag + "_joint_velocities");
@@ -91,6 +96,11 @@ function plotComparison(simFile, robotFile, tag)
     semilogy(ax, S.t, eSim, "--", "Color", cSim, "LineWidth", lw); hold(ax, "on");
     semilogy(ax, R.t, eRob, "-",  "Color", cRob, "LineWidth", lw); hold(ax, "off");
     styleAxes(ax, tEnd, true, "$\|\mathbf{e}\|$ (m)");
+    % Scale to the robot's error: the sim keeps converging to ~1e-14, which
+    % would squash the robot's steady-state floor. Lower limit = one decade
+    % below the robot's smallest error; the sim line simply leaves the plot.
+    eMin = min(eRob(eRob > 0));
+    ylim(ax, [10^(floor(log10(eMin)) - 1), 10^ceil(log10(max([eSim eRob])))]);
     legend(ax, "Simulation", "Robot", "Location", "best");
     saveFig(fig, figDir, tag + "_error_norm");
 
@@ -150,14 +160,19 @@ end
 
 function fig = newFigure(w, h)
     % Width 3.5 in = one IEEE column, 7.16 in = full page width (figure*).
-    fig = figure("Units", "inches", "Position", [1 1 w h], "Color", "white");
+    fig = figure("Units", "inches", "Position", [1 1 w h]);
+    % Force a light theme so figures stay white on paper even when the
+    % MATLAB desktop is in dark mode (R2025a+). Older releases are light anyway.
+    if isprop(fig, "Theme"), fig.Theme = "light"; end
+    fig.Color = "white";
     set(fig, "DefaultAxesFontSize", 9, "DefaultLegendFontSize", 7, ...
              "DefaultTextInterpreter", "latex");
 end
 
 function styleAxes(ax, tEnd, showXLabel, yLabel)
     grid(ax, "on");
-    xlim(ax, [0 tEnd]);
+    axis(ax, "padded");      % margin so lines at the data limits (e.g. Desired) stay visible
+    xlim(ax, [0 tEnd]);      % ...but keep the time axis tight
     ylabel(ax, yLabel, "Interpreter", "latex");
     if showXLabel, xlabel(ax, "Time (s)"); end
 end
