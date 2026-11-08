@@ -7,11 +7,11 @@ dataDir = fullfile(codeDir, '..', 'data');
 %% Load parameters 
 params = robotParams();
 x_des = [0.20; 0.20; 0.15];
-Kp = 1.5;          % match the robot run (Phase 1 used 5)
-k0 = 20;           % match the robot run (Phase 1 used 100)
+Kp = 1.5;          
+k0 = 50;          
 dt = 0.05;
-Tfinal = 10;       % robot runs are 10 s
-qd_max = 0.5;      % rad/s; set to Inf to reproduce Phase 1 exactly
+Tfinal = 10;       
+qd_max = 0.5;      
 animate = false;
 
 t = 0:dt:Tfinal;
