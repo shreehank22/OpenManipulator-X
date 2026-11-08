@@ -1,7 +1,7 @@
 %% Add to Path Script
 
 % Absolute path to the libraries on your system
-dynamixel_library_path = '/home/fer/PHD_RESEARCH/TA/RBE-502/DynamixelSDK'; % Change this to the absolute location of the dynamixel library on your system
+dynamixel_library_path = '/home/shreehank1906/DynamixelSDK';
 %
 % Add necessary folders and subfolders from the Dynamixel Library
 addpath(genpath(dynamixel_library_path + "/c/include"));
