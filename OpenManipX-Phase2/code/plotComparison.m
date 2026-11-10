@@ -39,7 +39,7 @@ function plotComparison(simFile, robotFile, tag)
     if ~isfield(R, "Ts"),       R.Ts = median(R.dt_log); end
     if ~isfield(R, "stopFlag"), R.stopFlag = "n/a (simulation file)"; end
 
-    %% Styles: simulation dashed grey, robot solid blue, commands orange
+    % Styles: simulation dashed grey, robot solid blue, commands orange
     cSim = [0.45 0.45 0.45];
     cRob = [0.0000 0.4470 0.7410];
     cCmd = [0.8500 0.3250 0.0980];
@@ -47,7 +47,7 @@ function plotComparison(simFile, robotFile, tag)
     lw   = 1.1;
     tEnd = max(S.t(end), R.t(end));
 
-    %% 1) Joint angles q_i(t)
+    % 1) Joint angles q_i(t)
     fig = newFigure(7.16, 3.6);
     tl = tiledlayout(fig, 2, 2, "TileSpacing", "compact", "Padding", "compact");
     for i = 1:4
@@ -59,7 +59,7 @@ function plotComparison(simFile, robotFile, tag)
     end
     saveFig(fig, figDir, tag + "_joint_angles");
 
-    %% 2) Joint velocities: robot commanded vs measured, plus simulation
+    % 2) Joint velocities: robot commanded vs measured, plus simulation
     fig = newFigure(7.16, 3.6);
     tl = tiledlayout(fig, 2, 2, "TileSpacing", "compact", "Padding", "compact");
     for i = 1:4
@@ -74,7 +74,7 @@ function plotComparison(simFile, robotFile, tag)
     end
     saveFig(fig, figDir, tag + "_joint_velocities");
 
-    %% 3) End-effector position from measured joint angles vs desired
+    % 3) End-effector position from measured joint angles vs desired
     fig = newFigure(7.16, 2.3);
     tl = tiledlayout(fig, 1, 3, "TileSpacing", "compact", "Padding", "compact");
     names = ["x", "y", "z"];
@@ -88,7 +88,7 @@ function plotComparison(simFile, robotFile, tag)
     end
     saveFig(fig, figDir, tag + "_ee_position");
 
-    %% 4) Position error norm (log scale shows the final error level)
+    % 4) Position error norm (log scale shows the final error level)
     eSim = vecnorm(S.e_log, 2, 1);
     eRob = vecnorm(R.e_log, 2, 1);
     fig = newFigure(3.5, 2.3);
@@ -104,7 +104,7 @@ function plotComparison(simFile, robotFile, tag)
     legend(ax, "Simulation", "Robot", "Location", "best");
     saveFig(fig, figDir, tag + "_error_norm");
 
-    %% 5) Translational manipulability (Task 2 only)
+    % 5) Translational manipulability (Task 2 only)
     if isfield(R, "k0")
         fig = newFigure(3.5, 2.3);
         ax = axes(fig);
@@ -115,7 +115,7 @@ function plotComparison(simFile, robotFile, tag)
         saveFig(fig, figDir, tag + "_manipulability");
     end
 
-    %% 6) Achieved sample time on the robot (for the discussion section)
+    % 6) Achieved sample time on the robot (for the discussion section)
     valid = R.dt_log > 0;          % last sample may be 0 if the run was interrupted
     fig = newFigure(3.5, 2.3);
     ax = axes(fig);
@@ -125,7 +125,7 @@ function plotComparison(simFile, robotFile, tag)
     legend(ax, "Achieved", "Target $T_s$", "Interpreter", "latex", "Location", "best");
     saveFig(fig, figDir, tag + "_sample_time");
 
-    %% Summary numbers for the report
+    % Summary numbers for the report
     fprintf("\n=== %s: simulation vs robot ===\n", tag);
     fprintf("Final ||e||    sim: %.3e m    robot: %.3e m\n", eSim(end), eRob(end));
     fprintf("Final q (rad)  sim:   [%s]\n", num2str(S.q_log(:,end)', "%9.4f"));

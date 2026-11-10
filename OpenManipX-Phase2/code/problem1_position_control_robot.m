@@ -1,112 +1,101 @@
+% code for Problem 1 of Phase 2 of the OpenManipX project. 
+% It implements a simple end-effector position control on the real OpenManipulator-X.
 function problem1_position_control_robot()
-%PROBLEM1_POSITION_CONTROL_ROBOT Task 1 (end-effector position control) on the
-%real OpenManipulator-X. Closes the loop on measured joint angles and commands
-%joint velocities in velocity mode.
 
-    %% Paths
+    % Paths and libraries for the robot communication code
     codeDir = fileparts(mfilename("fullpath"));
     addpath(fullfile(codeDir, "..", "..", "Communication_Code"));
-    % Dynamixel SDK paths (headers + shared library). Needed whenever the SDK
-    % library has to be (re)loaded, e.g. after "clear all" or a MATLAB restart.
     run(fullfile(codeDir, "..", "..", "init_libraries.m"));
     dataDir = fullfile(codeDir, "..", "data");
 
-    %% Parameters (re-run the sim with the same values for comparison)
     params = robotParams();
     x_des  = [0.20; 0.20; 0.15];
     Kp = 3;
-    Ts = 0.05;        % target sample time (s)
-    Tfinal = 10;          % run duration (s)
-    qd_max = 0.5;         % joint velocity limit (rad/s)
+    Ts = 0.05;      
+    Tfinal = 10;         
+    qd_max = 0.5;        
 
-    %% Joint limits from the URDF (rad); joint 1 restricted for cable safety
+    % Joint limits from the URDF (rad); joint 1 restricted for cable safety
     q_min  = [-1.5;-1.5;-1.5; -1.7];
     q_max = [ 1.5;1.5;1.4;1.97];
     margin = deg2rad(10);
 
-    %% Logs (one struct so they can be passed to saveRun)
+    % Logs (one struct so they can be passed to saveRun)
     N = round(Tfinal/Ts);
-    L.t             = zeros(1, N);
-    L.dt_log        = zeros(1, N);
-    L.m_log         = zeros(1, N);
-    L.q_log         = zeros(4, N);
+    L.t  = zeros(1, N);
+    L.dt_log = zeros(1, N);
+    L.m_log  = zeros(1, N);
+    L.q_log = zeros(4, N);
     L.qdot_meas_log = zeros(4, N);
     L.qdot_cmd_log  = zeros(4, N);
-    L.x_log         = zeros(3, N);
-    L.e_log         = zeros(3, N);
-    kLast    = 0;
+    L.x_log = zeros(3, N);
+    L.e_log = zeros(3, N);
+    kLast = 0;
     stopFlag = "complete";
     runError = [];
 
-    %% Connect. The guard commands zero velocities whenever this function exits,
-    %% including Ctrl+C. It holds its own reference to the robot, so it does not
-    %% depend on this function's workspace still existing.
     robot = Robot();
-    stopGuard = onCleanup(@() stopRobot(robot)); %#ok<NASGU>
+    stopGuard = onCleanup(@() stopRobot(robot)); 
 
     try
-        %% Home (q = 0) in position mode
-        input("SUPPORT THE ARM, then press Enter to home the robot (position mode)... ", "s");
+        % Home (q = 0) in position mode
+        input("Press Enter to drive the robot to the home position (position mode)... ", "s");
         robot.writeMode('p');
         robot.writeTime(2);
         robot.writeMotorState(true);
         robot.writeJoints([0 0 0 0]);
         pause(3);
 
-        input("SUPPORT THE ARM, then press Enter to switch to velocity mode... ", "s");
+        input("Press Enter to switch to velocity mode... ", "s");
         robot.writeMode('v');
         robot.writeTime(2,0);
         robot.writeVelocities([0 0 0 0]);
 
-        %% Control loop
+        % Control loop
         t0 = tic;
         for k = 1:N
             tLoop = tic;
 
-            % 1) Measure (deg -> rad)
+            % Get the current joint positions and velocities
             r = robot.getJointsReadings();
-            q       = deg2rad(r(1,:)');
+            q = deg2rad(r(1,:)');
             qd_meas = deg2rad(r(2,:)');
 
-            % 2) Safety: stop before any joint gets near its limit
+            % Safety: stop before any joint gets near its limit
             if any(q < q_min + margin) || any(q > q_max - margin)
                 warning("Joint limit reached at t = %.2f s. Stopping the robot.", toc(t0));
                 stopFlag = "limit";
                 break;
             end
 
-            % 3) Control law (same function as the simulation)
+            % Compute the end-effector position
             x = openManipulatorPosition(q, params);
             [qd_cmd, m] = controlLawTask1(q, x, x_des, params, Kp);
 
-            % 4) Saturate by uniform scaling (keeps the direction of qdot)
             qd_cmd = qd_cmd * min(1, qd_max / max(abs(qd_cmd)));
 
-            % 5) Command (rad/s -> deg/s)
             robot.writeVelocities(rad2deg(qd_cmd'));
 
-            % 6) Log
-            L.t(k)               = toc(t0);
-            L.q_log(:,k)         = q;
+            % Log the data
+            L.t(k) = toc(t0);
+            L.q_log(:,k) = q;
             L.qdot_meas_log(:,k) = qd_meas;
             L.qdot_cmd_log(:,k)  = qd_cmd;
-            L.x_log(:,k)         = x;
-            L.e_log(:,k)         = x_des - x;
-            L.m_log(k)           = m;
+            L.x_log(:,k) = x;
+            L.e_log(:,k) = x_des - x;
+            L.m_log(k) = m;
             kLast = k;
 
-            % 7) Fixed sample time
             while toc(tLoop) < Ts
             end
             L.dt_log(k) = toc(tLoop);
         end
+
     catch runError
         stopFlag = "error";
     end
 
-    %% Stop and save (normal completion, joint-limit stop, or MATLAB error).
-    %% Torque stays ON: the arm holds itself at zero velocity. Support the arm
-    %% before the next writeMode call.
+
     stopRobot(robot);
     meta = struct("Kp", Kp, "qd_max", qd_max, "Ts", Ts, "stopFlag", stopFlag);
     meta.x_des  = x_des;
@@ -118,7 +107,7 @@ function problem1_position_control_robot()
     if ~isempty(runError), rethrow(runError); end
 end
 
-%% ---------------------------------------------------------------- helpers
+% Stop the robot
 function stopRobot(robot)
     % Command zero joint velocities; never throw (used from onCleanup).
     try
